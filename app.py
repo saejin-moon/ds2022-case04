@@ -4,6 +4,7 @@ from flask_cors import CORS
 from pydantic import ValidationError
 from models import SurveySubmission, StoredSurveyRecord
 from storage import append_json_line
+from hashlib import sha256
 
 app = Flask(__name__)
 # Allow cross-origin requests so the static HTML can POST from localhost or file://
@@ -21,20 +22,35 @@ def ping():
 @app.post("/v1/survey")
 def submit_survey():
     payload = request.get_json(silent=True)
-    if payload is None:
-        return jsonify({"error": "invalid_json", "detail": "Body must be application/json"}), 400
+    if not payload:
+        return jsonify({"error": "Invalid JSON"}), 400
 
     try:
-        submission = SurveySubmission(**payload)
-    except ValidationError as ve:
-        return jsonify({"error": "validation_error", "detail": ve.errors()}), 422
+        record = SurveySubmission(**payload)
+    except ValidationError as e:
+        return jsonify({"error": "Validation error", "details": e.errors()}), 422
 
-    record = StoredSurveyRecord(
-        **submission.dict(),
-        received_at=datetime.now(timezone.utc),
-        ip=request.headers.get("X-Forwarded-For", request.remote_addr or "")
-    )
-    append_json_line(record.dict())
+    # Create a dictionary from the pydantic model to modify before saving
+    record_dict = record.dict()
+
+    # Hash PII fields
+    record_dict["email"] = sha256(record.email.encode()).hexdigest()
+    record_dict["age"] = sha256(str(record.age).encode()).hexdigest()
+
+    # Generate submission_id if not provided
+    if not record.submission_id:
+        now = datetime.utcnow()
+        date_hour_str = now.strftime("%Y%m%d%H")
+        submission_id_str = record.email + date_hour_str
+        record_dict["submission_id"] = sha256(submission_id_str.encode()).hexdigest()
+
+    # Enrich with server-side info
+    record_dict["received_at"] = datetime.utcnow().isoformat() + "Z"
+    record_dict["ip_address"] = request.remote_addr
+
+    # Persist to storage
+    append_json_line(record_dict)
+
     return jsonify({"status": "ok"}), 201
 
 if __name__ == "__main__":
