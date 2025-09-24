@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pydantic import ValidationError
@@ -28,7 +28,7 @@ def submit_survey():
     try:
         record = SurveySubmission(**payload)
     except ValidationError as e:
-        return jsonify({"error": "Validation error", "details": e.errors()}), 422
+        return jsonify({"error": "validation_error", "details": e.errors()}), 422
 
     # Create a dictionary from the pydantic model to modify before saving
     record_dict = record.dict()
@@ -39,13 +39,13 @@ def submit_survey():
 
     # Generate submission_id if not provided
     if not record.submission_id:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         date_hour_str = now.strftime("%Y%m%d%H")
         submission_id_str = record.email + date_hour_str
         record_dict["submission_id"] = sha256(submission_id_str.encode()).hexdigest()
 
     # Enrich with server-side info
-    record_dict["received_at"] = datetime.utcnow().isoformat() + "Z"
+    record_dict["received_at"] = datetime.now(UTC).isoformat() + "Z"
     record_dict["ip_address"] = request.remote_addr
 
     # Persist to storage
